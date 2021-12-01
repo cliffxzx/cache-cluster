@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-#include "gossip_protocol.hpp"
+#include "gossip.hpp"
 
 using namespace std;
 using namespace boost;
@@ -37,8 +37,8 @@ int main(int argc, char *argv[]) {
   }
 
   try {
-    GossipProtocal::GossipProtocal boss(ip, port);
-    vector<GossipProtocal::Member> members;
+    gossip::Gossip boss(ip, port);
+    vector<gossip::Member> members;
     for (int w = 3; w < argc; w += 2) {
       system::error_code ec;
       ip::address oip = ip::address::from_string(argv[w], ec);
@@ -48,7 +48,7 @@ int main(int argc, char *argv[]) {
       }
 
       ip::port_type oport = stoi(string(argv[w + 1]));
-      members.push_back(GossipProtocal::Member(oip, oport));
+      members.push_back(gossip::Member(oip, oport));
     }
     boss.add_members(members.begin(), members.end());
 

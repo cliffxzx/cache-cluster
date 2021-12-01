@@ -1,69 +1,25 @@
 #ifndef CACHE_CLUSTER_GOSSIP_PROTOCOL_HPP
 #define CACHE_CLUSTER_GOSSIP_PROTOCOL_HPP
 
-#include <algorithm>
-#include <boost/archive/text_iarchive.hpp>
-#include <boost/archive/text_oarchive.hpp>
 #include <boost/asio.hpp>
-#include <boost/iostreams/device/back_inserter.hpp>
-#include <boost/iostreams/stream.hpp>
-#include <boost/serialization/split_free.hpp>
-#include <boost/serialization/vector.hpp>
 #include <boost/thread.hpp>
-#include <boost/uuid/uuid.hpp>
-#include <boost/uuid/uuid_generators.hpp>
-#include <boost/uuid/uuid_io.hpp>
-#include <boost/uuid/uuid_serialize.hpp>
 #include <functional>
-#include <iostream>
-#include <iterator>
-#include <random>
-#include <sstream>
-#include <string>
-#include <vector>
 
-#include "utils.hpp"
+#include "member.hpp"
+#include "message.hpp"
+#include "custom_serialization.hpp"
 
 using namespace std;
 using namespace boost;
 using namespace boost::asio;
 
-namespace GossipProtocal {
-class Member {
-public:
-  Member();
-  Member(ip::udp::endpoint t_addr);
-  Member(ip::address addr, ip::port_type port);
-  ip::udp::endpoint addr_;
-  boost::uuids::uuid uid_;
+namespace gossip {
 
-private:
-  friend class boost::serialization::access;
-  template <class Archive>
-  void serialize(Archive &ar, const unsigned int version);
-};
-
-class VectorRecord {
-  uint32_t sequence_number;
-  uint64_t member_id;
-  friend class boost::serialization::access;
-  template <class Archive>
-  void serialize(Archive &ar, const unsigned int version);
-};
-
-class VectorClock {
-  uint16_t current_idx;
-  vector<VectorRecord> records;
-  friend class boost::serialization::access;
-  template <class Archive>
-  void serialize(Archive &ar, const unsigned int version);
-};
-
-class GossipProtocal {
-  typedef std::function<void(GossipProtocal *, system::error_code, string)> ReceiverFn;
+class Gossip {
+  typedef std::function<void(Gossip *, system::error_code, string)> ReceiverFn;
 
 public:
-  GossipProtocal(ip::address addr, ip::port_type port);
+  Gossip(ip::address addr, ip::port_type port);
   void run();
 
   enum class Error : int32_t {
@@ -93,13 +49,13 @@ public:
     BROADCAST
   };
 
-  void handle_hello(Message::Hello hello, ip::udp::endpoint sender);
+  void handle_hello(Hello hello, ip::udp::endpoint sender);
 
   Error receive();
 
   Error send();
 
-  Error enqueue_message(Message::Message t_message, Member t_member, SpreadingType t_spreading_type);
+  Error enqueue_message(Message t_message, Member t_member, SpreadingType t_spreading_type);
 
   template <class InputIterator>
   inline Error add_members(const InputIterator first, const InputIterator last);
@@ -144,10 +100,10 @@ private:
   ip::udp::socket socket_;
   string recv_buffer_;
   vector<Member> memberlist_;
-  vector<Message::Message> message_;
+  vector<Message> message_;
   State state;
-  void send_(Message::Message t_message);
+  void send_(Message t_message);
 };
-}; // namespace GossipProtocal
+}; // namespace Gossip
 
 #endif

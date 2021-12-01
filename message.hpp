@@ -1,12 +1,19 @@
 #ifndef CACHE_CLUSTER_MESSAGE_HPP
 #define CACHE_CLUSTER_MESSAGE_HPP
 
-#include "gossip_protocol.hpp"
+#include <string>
 
-namespace GossipProtocol {
-namespace Message {
+#include "member.hpp"
+
+using namespace std;
+using namespace boost;
+using namespace boost::asio;
+using namespace gossip;
+
+namespace gossip::message {
 static constexpr uint8_t PROTOCOL_ID_LENGTH = 5;
 static constexpr char PROTOCOL_ID[PROTOCOL_ID_LENGTH] = "ptcs";
+
 enum class Type : uint8_t {
   Hello = 0x01,
   Welcome = 0x02,
@@ -28,15 +35,12 @@ public:
   Header(uint8_t t_message_type, uint32_t t_sequence_num);
 
 private:
-  friend class boost::serialization::access;
-  template <class Archive>
-  void serialize(Archive &ar, const unsigned int version);
   operator string() const;
 };
 
 class Message {
 public:
-  Message() {}
+  Message();
   Header header;
   operator string() const;
 };
@@ -47,9 +51,6 @@ public:
   Hello();
   operator uint8_t() const;
   operator string() const;
-  friend class boost::serialization::access;
-  template <class Archive>
-  void serialize(Archive &ar, const unsigned int version);
 };
 
 class Welcome : public Message {
@@ -79,7 +80,7 @@ public:
 
 class Data : public Message {
 public:
-  VectorRecord data_version;
+  // VectorRecord data_version;
   vector<uint8_t> data;
   Data();
   operator uint8_t() const;
@@ -88,13 +89,12 @@ public:
 
 class Status : public Message {
 public:
-  VectorClock data_version;
+  // VectorClock data_version;
   Status();
   operator uint8_t() const;
   operator string() const;
 };
 
-}; // namespace Message
-} // namespace GossipProtocol
+}; // namespace GossipProtocol::Message
 
 #endif

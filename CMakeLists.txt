@@ -12,18 +12,21 @@ include(CTest)
 enable_testing()
 
 set(SOURCE_FILES
-  "gossip_protocol.hpp"
-  "gossip_protocol.cpp"
-  "utils.hpp"
-  "utils.cpp"
-  "message.hpp"
-  "message.cpp"
-  "main.cpp"
+"member.hpp"
+"member.cpp"
+"message.hpp"
+"message.cpp"
+"custom_serialization.hpp"
+"custom_serialization.cpp"
+"gossip.hpp"
+"gossip.cpp"
+"main.cpp"
 )
 
 add_executable(cache-cluster ${SOURCE_FILES})
 target_link_libraries(cache-cluster PRIVATE Boost::boost
                                             ${Boost_SYSTEM_LIBRARY}
+                                            ${Boost_UUID_LIBRARY}
                                             ${Boost_SERIALIZATION_LIBRARY})
 
 set(CPACK_PROJECT_NAME ${PROJECT_NAME})
