@@ -13,44 +13,40 @@ using namespace boost::iostreams;
 
 namespace gossip::message {
 
-Header::Header() {}
+Header::Header() : message_type(0), attempt_num(0), sequence_num(0), reserved(1) {}
 Header::Header(uint8_t t_message_type, uint32_t t_sequence_num) : message_type(t_message_type), sequence_num(t_sequence_num), reserved(1) {}
-Header::operator string() const {
-  std::string serial_str;
-  back_insert_device<std::string> inserter(serial_str);
-  stream<back_insert_device<std::string>> s(inserter);
+string Header::to_string() const {
+  string serial_str;
+  back_insert_device<string> inserter(serial_str);
+  stream<back_insert_device<string>> s(inserter);
   boost::archive::text_oarchive oa(s);
-
-  // oa << *this;
-
+  oa << *this;
   s.flush();
   return serial_str;
 }
 
 Message::Message() {}
-Message::operator string() const {
-  std::string serial_str;
-  back_insert_device<std::string> inserter(serial_str);
-  stream<back_insert_device<std::string>> s(inserter);
+string Message::to_string() const {
+  string serial_str;
+  back_insert_device<string> inserter(serial_str);
+  stream<back_insert_device<string>> s(inserter);
   boost::archive::text_oarchive oa(s);
-
-  // oa << header;
-
+  oa << header;
   s.flush();
   return serial_str;
 }
 
-Hello::Hello() {
+Hello::Hello() {}
+Hello::Hello(uint16_t max_attempt) {
   header.message_type = (uint8_t)Type::Hello;
+  header.sequence_num = 0;
 }
-Hello::operator string() const {
-  std::string serial_str;
-  back_insert_device<std::string> inserter(serial_str);
-  stream<back_insert_device<std::string>> s(inserter);
+string Hello::to_string() const {
+  string serial_str;
+  back_insert_device<string> inserter(serial_str);
+  stream<back_insert_device<string>> s(inserter);
   boost::archive::text_oarchive oa(s);
-
-  // oa << header << self;
-
+  oa << header << self;
   s.flush();
   return serial_str;
 }
@@ -58,10 +54,10 @@ Hello::operator string() const {
 Welcome::Welcome() {
   header.message_type = (uint8_t)Type::Welcome;
 }
-Welcome::operator string() const {
-  std::string serial_str;
-  back_insert_device<std::string> inserter(serial_str);
-  stream<back_insert_device<std::string>> s(inserter);
+string Welcome::to_string() const {
+  string serial_str;
+  back_insert_device<string> inserter(serial_str);
+  stream<back_insert_device<string>> s(inserter);
   boost::archive::text_oarchive oa(s);
 
   // oa << header << hello_sequence_num << self;
@@ -73,7 +69,7 @@ Welcome::operator string() const {
 Memberlist::Memberlist() {
   header.message_type = (uint8_t)Type::Memberlist;
 }
-Memberlist::operator string() const {
+string Memberlist::to_string() const {
   ostringstream oss;
   boost::archive::text_oarchive oa(oss);
   // oa << header << members;
@@ -83,7 +79,7 @@ Memberlist::operator string() const {
 Ack::Ack() {
   header.message_type = (uint8_t)Type::Ack;
 }
-Ack::operator string() const {
+string Ack::to_string() const {
   ostringstream oss;
   boost::archive::text_oarchive oa(oss);
   // oa << header << ack_sequence_num;
@@ -93,7 +89,7 @@ Ack::operator string() const {
 Data::Data() {
   header.message_type = (uint8_t)Type::Data;
 }
-Data::operator string() const {
+string Data::to_string() const {
   ostringstream oss;
   boost::archive::text_oarchive oa(oss);
   // oa << header << data_version << data;
@@ -103,7 +99,7 @@ Data::operator string() const {
 Status::Status() {
   header.message_type = (uint8_t)Type::Status;
 }
-Status::operator string() const {
+string Status::to_string() const {
   ostringstream oss;
   boost::archive::text_oarchive oa(oss);
   // oa << header << data_version;

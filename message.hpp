@@ -2,6 +2,7 @@
 #define CACHE_CLUSTER_MESSAGE_HPP
 
 #include <string>
+#include <boost/serialization/serialization.hpp>
 
 #include "member.hpp"
 
@@ -34,23 +35,47 @@ public:
   Header();
   Header(uint8_t t_message_type, uint32_t t_sequence_num);
 
-private:
-  operator string() const;
+  virtual string to_string() const;
+
+  friend class boost::serialization::access;
+  template <class Archive>
+  void serialize(Archive &ar, const unsigned int version) {
+    ar &message_type;
+    ar &reserved;
+    ar &sequence_num;
+  }
 };
 
 class Message {
 public:
   Message();
   Header header;
-  operator string() const;
+  virtual string to_string() const;
+
+  friend class boost::serialization::access;
+  template <class Archive>
+  void serialize(Archive &ar, const unsigned int version) {
+    ar &header;
+  };
+
+
 };
 
 class Hello : public Message {
 public:
   Member self;
+
   Hello();
-  operator uint8_t() const;
-  operator string() const;
+  Hello(uint16_t max_attempts);
+
+  virtual string to_string() const override;
+
+  friend class boost::serialization::access;
+  template <class Archive>
+  void serialize(Archive &ar, const unsigned int version) {
+    ar &header;
+    ar &self;
+  };
 };
 
 class Welcome : public Message {
@@ -58,43 +83,36 @@ public:
   uint32_t hello_sequence_num;
   Member self;
   Welcome();
-  operator uint8_t() const;
-  operator string() const;
+  virtual string to_string() const override;
 };
 
 class Memberlist : public Message {
 public:
   vector<Member> members;
   Memberlist();
-  operator uint8_t() const;
-  operator string() const;
+  virtual string to_string() const override;
 };
 
 class Ack : public Message {
 public:
   uint32_t ack_sequence_num;
   Ack();
-  operator uint8_t() const;
-  operator string() const;
+  virtual string to_string() const override;
 };
 
 class Data : public Message {
 public:
-  // VectorRecord data_version;
   vector<uint8_t> data;
   Data();
-  operator uint8_t() const;
-  operator string() const;
+  virtual string to_string() const override;
 };
 
 class Status : public Message {
 public:
-  // VectorClock data_version;
   Status();
-  operator uint8_t() const;
-  operator string() const;
+  virtual string to_string() const override;
 };
 
-}; // namespace GossipProtocol::Message
+}; // namespace gossip::message
 
 #endif

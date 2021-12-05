@@ -3,15 +3,18 @@
 
 #include <boost/asio.hpp>
 #include <boost/thread.hpp>
+#include <deque>
 #include <functional>
+#include <vector>
+#include <memory>
 
 #include "member.hpp"
 #include "message.hpp"
-#include "custom_serialization.hpp"
 
 using namespace std;
 using namespace boost;
 using namespace boost::asio;
+using namespace gossip::message;
 
 namespace gossip {
 
@@ -57,8 +60,7 @@ public:
 
   Error enqueue_message(Message t_message, Member t_member, SpreadingType t_spreading_type);
 
-  template <class InputIterator>
-  inline Error add_members(const InputIterator first, const InputIterator last);
+  Error add_member(Member t_member);
 
   /** The interval in milliseconds between retry attempts. */
   int32_t &message_retry_interval();
@@ -99,11 +101,11 @@ private:
   ip::udp::endpoint endpoint_;
   ip::udp::socket socket_;
   string recv_buffer_;
-  vector<Member> memberlist_;
-  vector<Message> message_;
+  map<string, unique_ptr<Member>> memberlist_;
+  deque<unique_ptr<Message>> message_;
   State state;
   void send_(Message t_message);
 };
-}; // namespace Gossip
+}; // namespace gossip
 
 #endif

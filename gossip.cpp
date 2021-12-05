@@ -2,6 +2,10 @@
 #include <boost/archive/text_iarchive.hpp>
 #include <boost/archive/text_oarchive.hpp>
 #include <boost/asio.hpp>
+#include <boost/log/trivial.hpp>
+#include <deque>
+#include <map>
+#include <queue>
 #include <random>
 #include <sstream>
 #include <string>
@@ -44,10 +48,13 @@ void Gossip::handle_hello(Hello hello, ip::udp::endpoint sender) {
   welcome.header.destination = Member(sender);
   enqueue_message(welcome, Member(sender), SpreadingType::DIRECT);
 
-  memberlist_.push_back(welcome.header.destination);
+  memberlist_.emplace(to_string(welcome.header.destination.uid()), welcome.header.destination);
 }
 
 Gossip::Error Gossip::receive() {
+  if (state != State::JOINING && state != State::CONNECTED)
+    return Error::BAD_STATE;
+
   std::string recv_buffer;
   ip::udp::endpoint sender;
   socket_.async_receive_from(
@@ -95,12 +102,17 @@ Gossip::Error Gossip::send() {
     return Error::BAD_STATE;
 
   while (!this->message_.empty()) {
-    Message message(this->message_.back());
-    this->message_.pop_back();
-    if (message.header.attempt_num < 1)
-      continue;
+    if (message_.front()->header.attempt_num <= 0) {
+      if (message_retry_attempts() > 1) {
+        memberlist_.erase(to_string(message_.front()->header.destination.uid()));
+      }
 
-    send_(message);
+      this->message_.pop_front();
+      continue;
+    }
+
+    send_(message_.front());
+    message_.pop_front();
   }
 
   return Error::NONE;
@@ -113,86 +125,69 @@ Gossip::Error Gossip::enqueue_message(Message t_message, Member t_member, Spread
 
   switch (t_spreading_type) {
     case SpreadingType::DIRECT:
-      message_.push_back(message);
+      message_.emplace_back(message);
       return Gossip::Error::NONE;
     case SpreadingType::RANDOM: {
-      vector<Member> reservoir;
-      reservoir.reserve(this->message_rumor_factor());
+      map<string, Member> reservoir;
       sample(memberlist_.begin(), memberlist_.end(),
-             back_inserter(reservoir),
+             inserter(reservoir, reservoir.begin()),
              this->message_rumor_factor(),
              std::mt19937{std::random_device{}()});
-      for (const Member member : reservoir) {
-        message_.push_back(message);
+      for (const pair<string, Member> member : reservoir) {
+        message_.emplace_back(message);
       }
       return Gossip::Error::NONE;
     }
     case SpreadingType::BROADCAST: {
-      for (const Member member : memberlist_) {
-        message_.push_back(message);
+      for (const pair<string, unique_ptr<Member>> member : memberlist_) {
+        message_.emplace_back(message);
       }
       return Gossip::Error::NONE;
     }
   }
 }
 
-// Todo hello to every member:270
-template <class InputIterator>
-inline Gossip::Error Gossip::add_members(const InputIterator first, const InputIterator last) {
-  if (this->state != State::INITIALIZED)
+Gossip::Error Gossip::add_member(Member t_member) {
+  if (state != State::INITIALIZED)
     return Gossip::Error::BAD_STATE;
 
-  if (last - first == 0) {
-    this->state = State::CONNECTED;
-    return Gossip::Error::NONE;
-  }
-
-  for (auto it = first; it != last; ++it) {
-    Member member = *it;
-    Error res = enqueue_message(Hello(), member, SpreadingType::DIRECT);
-    if ((uint32_t)res < 0)
-      return res;
-  }
+  Error res = enqueue_message(Hello(message_retry_attempts()), t_member, SpreadingType::DIRECT);
+  if ((uint32_t)res < 0)
+    return res;
 
   this->state = State::JOINING;
   return Gossip::Error::NONE;
 }
 
-template Gossip::Error Gossip::add_members(
-    const vector<Member>::iterator first,
-    const vector<Member>::iterator last);
-
-/** The interval in milliseconds between retry attempts. */
 int32_t &Gossip::message_retry_interval() { return message_retry_interval_; }
 const int32_t &Gossip::message_retry_interval() const { return message_retry_interval_; }
 
-/** The maximum number of attempts to deliver a message. */
 int32_t &Gossip::message_retry_attempts() { return message_retry_attempts_; }
 const int32_t &Gossip::message_retry_attempts() const { return message_retry_attempts_; }
 
-/** The number of members that are used for further gossip propagation. */
 int32_t &Gossip::message_rumor_factor() { return message_rumor_factor_; }
 const int32_t &Gossip::message_rumor_factor() const { return message_rumor_factor_; }
 
-/** The maximum supported size of the message including a gossip overhead. */
 int32_t &Gossip::message_max_size() { return message_max_size_; }
 const int32_t &Gossip::message_max_size() const { return message_max_size_; }
 
-/** The maximum number of unique messages that can be stored in the outbound message queue. */
 int32_t &Gossip::max_output_messages() { return max_output_messages_; }
 const int32_t &Gossip::max_output_messages() const { return max_output_messages_; }
 
-/** The time interval in milliseconds that determines how often the Gossip tick event should be triggered. */
 int32_t &Gossip::gossip_tick_interval() { return gossip_tick_interval_; }
 const int32_t &Gossip::gossip_tick_interval() const { return gossip_tick_interval_; }
 
-void Gossip::send_(Message t_message) {
-  string message = string(t_message) + '\n';
+void Gossip::send_(unique_ptr<Message> &t_message) {
+  string message = t_message->to_string() + '\n';
+  BOOST_LOG_TRIVIAL(debug) << "\n\tSend to address:"
+                           << to_string(t_message->header.destination.address())
+                           << "\n\tSend message:"
+                           << message;
   socket_.async_send_to(
-      buffer(message), t_message.header.destination.address(),
+      buffer(message), t_message->header.destination.address(),
       [this](boost::system::error_code ec, std::size_t length) {
         if (ec)
           return;
       });
 }
-}; // namespace GossipProtocal
+}; // namespace gossip

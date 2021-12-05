@@ -2,16 +2,54 @@
 #define CACHE_CLUSTER_MEMBER_HPP
 
 #include <boost/asio.hpp>
+#include <boost/serialization/serialization.hpp>
+#include <boost/serialization/split_free.hpp>
 #include <boost/uuid/uuid.hpp>
+#include <boost/uuid/uuid_io.hpp>
+#include <boost/uuid/uuid_serialize.hpp>
+#include <string>
 
+using namespace std;
 using namespace boost;
 using namespace boost::asio;
+
+namespace boost::serialization {
+
+template <class Archive, class Protocol>
+void save(Archive &ar, const ip::basic_endpoint<Protocol> &e, const unsigned int version) {
+  string ip = e.address().to_string();
+  ip::port_type port = e.port();
+  ar &ip;
+  ar &port;
+}
+template <class Archive, class Protocol>
+void load(Archive &ar, ip::basic_endpoint<Protocol> &e, const unsigned int version) {
+  string ip;
+  ip::port_type port;
+  ar &ip;
+  ar &port;
+  e = ip::basic_endpoint<Protocol>(ip::address::from_string(ip), port);
+}
+
+template <class Archive, class Protocol>
+void serialize(Archive &ar, ip::basic_endpoint<Protocol> &e, const unsigned int version) {
+  split_free(ar, e, version);
+}
+
+} // namespace boost::serialization
 
 namespace gossip {
 
 class Member {
   uuids::uuid uid_;
   ip::udp::endpoint addr_;
+
+  friend class boost::serialization::access;
+  template <class Archive>
+  void serialize(Archive &ar, const unsigned int version) {
+    ar &uid_;
+    ar &addr_;
+  }
 
 public:
   Member();

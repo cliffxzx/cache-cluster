@@ -38,7 +38,6 @@ int main(int argc, char *argv[]) {
 
   try {
     gossip::Gossip boss(ip, port);
-    vector<gossip::Member> members;
     for (int w = 3; w < argc; w += 2) {
       system::error_code ec;
       ip::address oip = ip::address::from_string(argv[w], ec);
@@ -48,9 +47,8 @@ int main(int argc, char *argv[]) {
       }
 
       ip::port_type oport = stoi(string(argv[w + 1]));
-      members.push_back(gossip::Member(oip, oport));
+      boss.add_member(gossip::Member(oip, oport));
     }
-    boss.add_members(members.begin(), members.end());
 
     boss.run();
   } catch (const std::exception &ex) {
