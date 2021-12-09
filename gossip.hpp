@@ -5,8 +5,8 @@
 #include <boost/thread.hpp>
 #include <deque>
 #include <functional>
-#include <vector>
 #include <memory>
+#include <vector>
 
 #include "member.hpp"
 #include "message.hpp"
@@ -19,10 +19,10 @@ using namespace gossip::message;
 namespace gossip {
 
 class Gossip {
-  typedef std::function<void(Gossip *, system::error_code, string)> ReceiverFn;
+  typedef std::function<void(string)> ReceiverFn;
 
 public:
-  Gossip(ip::address addr, ip::port_type port);
+  Gossip(ip::address addr, ip::port_type port, ReceiverFn t_receiver);
   void run();
 
   enum class Error : int32_t {
@@ -52,13 +52,13 @@ public:
     BROADCAST
   };
 
-  void handle_hello(Hello hello, ip::udp::endpoint sender);
+  Error handle_receive(std::shared_ptr<Message> &t_message, ip::udp::endpoint t_sender);
 
-  Error receive();
+  Error handle_send();
 
-  Error send();
+  void send(string data);
 
-  Error enqueue_message(Message t_message, Member t_member, SpreadingType t_spreading_type);
+  Error enqueue_message(std::shared_ptr<Message> &t_message, std::shared_ptr<Member> &t_member, SpreadingType t_spreading_type);
 
   Error add_member(Member t_member);
 
@@ -90,21 +90,28 @@ public:
   string &recv_buffer();
   const string &recv_buffer() const;
 
+  Member &self();
+  const Member &self() const;
+
 private:
   int32_t message_retry_interval_ = 10000;
   int32_t message_retry_attempts_ = 3;
   int32_t message_rumor_factor_ = 3;
-  int32_t message_max_size_ = 512;
-  int32_t max_output_messages_ = 100;
-  int32_t gossip_tick_interval_ = 1000;
+  int32_t message_max_size_ = 65535;
+  int32_t max_output_messages_ = 65535;
+  int32_t gossip_tick_interval_ = 500;
   io_service service_;
-  ip::udp::endpoint endpoint_;
+  Member self_;
   ip::udp::socket socket_;
   string recv_buffer_;
-  map<string, unique_ptr<Member>> memberlist_;
-  deque<unique_ptr<Message>> message_;
+  ip::udp::endpoint sender_;
+  map<string, std::shared_ptr<Member>> memberlist_;
+  ReceiverFn receiver_fn_;
+  // use std::shared_ptr because need use virtual derived class method to_string
+  deque<std::shared_ptr<Message>> message_;
   State state;
-  void send_(Message t_message);
+  Error receive_();
+  void send_(std::shared_ptr<Message> &t_message);
 };
 }; // namespace gossip
 

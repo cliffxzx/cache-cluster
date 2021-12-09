@@ -16,29 +16,6 @@ using namespace boost::iostreams;
 
 namespace gossip::message {
 
-Header::Header(
-    Type t_type,
-    uint32_t t_sequence,
-    uint16_t t_remain_attempt,
-    uint16_t t_reserved,
-    std::shared_ptr<Member> t_destination)
-    : type(t_type),
-      sequence(t_sequence),
-      remain_attempt(t_remain_attempt),
-      destination(t_destination),
-      reserved(t_reserved) {}
-
-Message::Message(Header t_header) : header(t_header) {}
-string Message::to_string() const {
-  string serial_str;
-  back_insert_device<string> inserter(serial_str);
-  stream<back_insert_device<string>> s(inserter);
-  boost::archive::text_oarchive oa(s);
-  oa << this;
-  s.flush();
-  return serial_str;
-}
-
 Hello::Hello(std::shared_ptr<Member> t_self, Header t_header) : self(t_self) {
   header = Header(Type::Hello,
                   t_header.sequence,

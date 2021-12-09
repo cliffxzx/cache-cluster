@@ -30,44 +30,6 @@ enum class Type : int8_t {
   Status = 0x06,
 };
 
-class Header {
-  friend class boost::serialization::access;
-  template <class Archive>
-  void serialize(Archive &ar, const unsigned int version) {
-    ar &BOOST_SERIALIZATION_NVP(type);
-    ar &BOOST_SERIALIZATION_NVP(reserved);
-    ar &BOOST_SERIALIZATION_NVP(remain_attempt);
-    ar &BOOST_SERIALIZATION_NVP(sequence);
-  }
-
-public:
-  Type type;
-  uint16_t reserved;
-  uint16_t remain_attempt;
-  uint32_t sequence;
-  std::shared_ptr<Member> destination;
-
-  Header(Type t_type = Type::Header,
-         uint32_t t_sequence = 0,
-         uint16_t t_reamain_attempt = 0,
-         uint16_t t_reserved = 1,
-         std::shared_ptr<Member> t_destination = nullptr);
-};
-
-class Message {
-  friend class boost::serialization::access;
-  template <class Archive>
-  void serialize(Archive &ar, const unsigned int version) {
-    ar &BOOST_SERIALIZATION_NVP(header);
-  };
-
-public:
-  Header header;
-
-  Message(Header t_header = Header());
-  virtual string to_string() const;
-};
-
 class Hello : public Message {
   friend class boost::serialization::access;
   template <class Archive>
