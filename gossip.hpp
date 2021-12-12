@@ -1,66 +1,104 @@
-#ifndef CACHE_CLUSTER_GOSSIP_PROTOCOL_HPP
-#define CACHE_CLUSTER_GOSSIP_PROTOCOL_HPP
+#ifndef GOSSIP_PROTOCOL_HPP
+#define GOSSIP_PROTOCOL_HPP
 
 #include <boost/asio.hpp>
 #include <boost/thread.hpp>
 #include <deque>
 #include <functional>
+#include <future>
 #include <memory>
 #include <vector>
 
 #include "member.hpp"
 #include "message.hpp"
 
-using namespace std;
-using namespace boost;
-using namespace boost::asio;
-using namespace gossip::message;
+using boost::asio::io_context;
+using boost::asio::ip::address;
+using boost::asio::ip::port_type;
+using boost::asio::ip::udp;
+using gossip::Member;
+using gossip::message::IMessages;
+using gossip::message::IMessages_Ptr;
+using gossip::message::Message;
+using std::async;
+using std::future;
+using std::set;
+using std::shared_future;
+using std::shared_ptr;
+using std::string;
+using std::thread;
 
 namespace gossip {
+enum class Error : int32_t {
+  NONE = 0,
+  INIT_FAILED = -1,
+  ALLOCATION_FAILED = -2,
+  BAD_STATE = -3,
+  INVALID_MESSAGE = -4,
+  BUFFER_NOT_ENOUGH = -5,
+  NOT_FOUND = -6,
+  WRITE_FAILED = -7,
+  READ_FAILED = -8
+};
+
+enum class State {
+  INITIALIZED,
+  JOINING,
+  CONNECTED,
+  LEAVING,
+  DISCONNECTED,
+  DESTROYED
+};
+
+enum class Spreading {
+  DIRECT,
+  RANDOM,
+  BROADCAST
+};
 
 class Gossip {
   typedef std::function<void(string)> ReceiverFn;
+  ReceiverFn m_receiver;
+
+  int32_t m_message_retry_interval = 10000;
+  int32_t m_message_retry_attempts = 3;
+  int32_t m_message_rumor_factor = 3;
+  int32_t m_message_max_size = 65535;
+  int32_t m_max_output_messages = 65535;
+  int32_t m_gossip_tick_interval = 500;
+
+  State m_state = State::INITIALIZED;
+  Member::shared_ptr m_self_member;
+  set<Member::shared_ptr> m_memberlist;
+  set<Message::shared_ptr> m_message;
+
+  io_context m_context;
+  udp::socket m_socket = udp::socket(m_context);
+
+  string m_temp_recv_buffer;
+  udp::endpoint m_temp_sender;
+
+  void m_receive_handler();
+  void m_send_handler();
+  Error m_receive(const string t_data, const Member t_sender);
+  template <IMessages_Ptr IMessage_Ptr>
+  Error m_send(IMessage_Ptr t_message);
 
 public:
-  Gossip(ip::address addr, ip::port_type port, ReceiverFn t_receiver);
+  Gossip() = default;
+  Gossip(const Member t_self_member, const ReceiverFn t_receiver);
+
   void run();
 
-  enum class Error : int32_t {
-    NONE = 0,
-    INIT_FAILED = -1,
-    ALLOCATION_FAILED = -2,
-    BAD_STATE = -3,
-    INVALID_MESSAGE = -4,
-    BUFFER_NOT_ENOUGH = -5,
-    NOT_FOUND = -6,
-    WRITE_FAILED = -7,
-    READ_FAILED = -8
-  };
+  template <typename Streamable>
+  future<Error> send(const Streamable data);
 
-  enum class State : int32_t {
-    INITIALIZED,
-    JOINING,
-    CONNECTED,
-    LEAVING,
-    DISCONNECTED,
-    DESTROYED
-  };
+  template <IMessages IMessage>
+  Error enqueue_message(const IMessage t_message,
+                        const Spreading t_spreading,
+                        const Member::shared_ptr t_member = nullptr);
 
-  enum class SpreadingType {
-    DIRECT,
-    RANDOM,
-    BROADCAST
-  };
-
-  Error handle_receive(std::shared_ptr<Message> &t_message, ip::udp::endpoint t_sender);
-
-  Error handle_send();
-
-  void send(string data);
-
-  Error enqueue_message(std::shared_ptr<Message> &t_message, std::shared_ptr<Member> &t_member, SpreadingType t_spreading_type);
-
-  Error add_member(Member t_member);
+  Error add_member(const Member t_member);
 
   /** The interval in milliseconds between retry attempts. */
   int32_t &message_retry_interval();
@@ -86,32 +124,7 @@ public:
   int32_t &gossip_tick_interval();
   const int32_t &gossip_tick_interval() const;
 
-  /** The time interval in milliseconds that determines how often the Gossip tick event should be triggered. */
-  string &recv_buffer();
-  const string &recv_buffer() const;
-
-  Member &self();
-  const Member &self() const;
-
-private:
-  int32_t message_retry_interval_ = 10000;
-  int32_t message_retry_attempts_ = 3;
-  int32_t message_rumor_factor_ = 3;
-  int32_t message_max_size_ = 65535;
-  int32_t max_output_messages_ = 65535;
-  int32_t gossip_tick_interval_ = 500;
-  io_service service_;
-  Member self_;
-  ip::udp::socket socket_;
-  string recv_buffer_;
-  ip::udp::endpoint sender_;
-  map<string, std::shared_ptr<Member>> memberlist_;
-  ReceiverFn receiver_fn_;
-  // use std::shared_ptr because need use virtual derived class method to_string
-  deque<std::shared_ptr<Message>> message_;
-  State state;
-  Error receive_();
-  void send_(std::shared_ptr<Message> &t_message);
+  const Member::shared_ptr &self_member() const;
 };
 }; // namespace gossip
 

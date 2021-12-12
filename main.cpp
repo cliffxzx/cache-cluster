@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <boost/asio.hpp>
+#include <boost/program_options.hpp>
 #include <iostream>
 #include <string>
 #include <thread>
@@ -7,62 +8,88 @@
 
 #include "gossip.hpp"
 
-using namespace std;
-using namespace boost;
-using namespace boost::asio;
+using boost::asio::ip::udp;
+using boost::program_options::error;
+using boost::program_options::notify;
+using boost::program_options::options_description;
+using boost::program_options::parse_command_line;
+using boost::program_options::store;
+using boost::program_options::value;
+using boost::program_options::variables_map;
+using gossip::Gossip;
+using gossip::Member;
+using std::cerr;
+using std::cin;
+using std::cout;
+using std::endl;
+using std::launch;
+using std::make_unique;
+using std::string;
+using std::unique_ptr;
+using std::vector;
+
+unique_ptr<error> parse_args(
+    int argc, char *argv[],
+    Member &self_member,
+    vector<Member> &memberlist) {
+  options_description options("Cache Cluster CLI");
+  options.add_options()
+      .
+      operator()("help", "TODO")
+      .
+      operator()("self,s",
+                 value(&self_member)
+                     ->value_name("[ip] [port]"),
+                 "The endpoint of self")
+      .
+      operator()("memberlist,m",
+                 value(&memberlist)
+                     ->value_name("[ip] [port]")
+                     ->multitoken(),
+                 "The endpoints of memberlist");
+
+  variables_map args;
+  try {
+    store(parse_command_line(argc, argv, options), args);
+    notify(args);
+  } catch (error e) {
+    cerr << e.what() << endl;
+    return make_unique<error>(e);
+  }
+
+  return nullptr;
+}
 
 int main(int argc, char *argv[]) {
-  if (argc == 1) {
-    argc = 5;
-    char *temp[] = {(char *)"", (char *)"0.0.0.0", (char *)"12345", (char *)"0.0.0.0", (char *)"12345"};
-    argv = temp;
-  }
+  Member self_member("0.0.0.0 7777");
+  vector<Member> memberlist;
 
-  if (!(argc % 2)) {
-    cout << "Error: should be: cache-cluster Self-IP Self-Port [[O1-IP] [O1-Port], [O2-IP] [O2-Port], ...]\n";
-    return 1;
-  }
+  parse_args(argc, argv, self_member, memberlist);
 
-  ip::address ip = ip::address::from_string("0.0.0.0");
-  ip::port_type port = 12345;
-
-  if (argc >= 3) {
-    system::error_code ec;
-    ip = ip::address::from_string(argv[1], ec);
-    if (ec) {
-      cout << "Error: can't parse Self-IP";
-      return 1;
-    }
-
-    port = stoi(string(argv[2]));
+  if (memberlist.empty()) {
+    memberlist.insert(memberlist.end(), {"0.0.0.0 7777"});
   }
 
   try {
-    auto boss = std::make_shared<gossip::Gossip>(ip, port, [](string data) {
-      cout << "cliff" << data;
-    });
-    for (int w = 3; w < argc; w += 2) {
-      system::error_code ec;
-      ip::address oip = ip::address::from_string(argv[w], ec);
-      if (ec) {
-        cout << "Error: can't parse O" << w / 2 << "-IP";
-        return 1;
-      }
+    auto receiver = [](string data) {
+      cerr << "main::run::receiver: " << data;
+    };
 
-      ip::port_type oport = stoi(string(argv[w + 1]));
-      boss->add_member(gossip::Member(oip, oport));
+    auto server = Gossip(self_member, receiver);
+    for (auto member : memberlist) {
+      server.add_member(member);
     }
 
-    std::thread t(&gossip::Gossip::run, boss);
-    // std::this_thread::sleep_for(std::chrono::milliseconds(30000));
-    string command, name;
-    // boss->send("TEST");
+    future<void> res = async(launch::async, &Gossip::run, &server);
+
+    string command;
     while (cin >> command) {
-      boss->send(command);
+      cout << command;
     }
-    t.join();
+
+    res.get();
   } catch (const std::exception &ex) {
-    cout << ex.what() << std::endl;
+    cerr << ex.what() << std::endl;
   }
 
   return 0;

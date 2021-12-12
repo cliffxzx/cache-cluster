@@ -2,9 +2,11 @@
 #include <boost/archive/text_iarchive.hpp>
 #include <boost/archive/text_oarchive.hpp>
 #include <boost/asio.hpp>
+#include <boost/core/demangle.hpp>
 #include <boost/log/trivial.hpp>
 #include <boost/serialization/shared_ptr.hpp>
 #include <deque>
+#include <iostream>
 #include <map>
 #include <queue>
 #include <random>
@@ -14,247 +16,207 @@
 
 #include "gossip.hpp"
 
-using namespace std;
-using namespace boost;
-using namespace boost::asio;
-using namespace gossip;
-using namespace gossip::message;
+using boost::archive::text_iarchive;
+using boost::asio::buffer;
+using boost::asio::dynamic_buffer;
+using boost::asio::io_service;
+using boost::asio::ip::address;
+using boost::asio::ip::port_type;
+using boost::asio::ip::udp;
+using boost::core::demangle;
+using boost::system::error_code;
+using gossip::Member;
+using gossip::message::Hello;
+using gossip::message::IMessages;
+using gossip::message::IMessages_Ptr;
+using gossip::message::Message;
+using gossip::message::Welcome;
+using std::async;
+using std::future;
+using std::istringstream;
+using std::make_shared;
+using std::mt19937;
+using std::random_device;
+using std::set;
+using std::shared_future;
+using std::shared_ptr;
+using std::string;
+using std::thread;
+using std::chrono::milliseconds;
+using std::this_thread::sleep_for;
 
 namespace gossip {
 
-Gossip::Gossip(ip::address addr, ip::port_type port, ReceiverFn t_receiver)
-    : self_(ip::udp::endpoint(addr, port)),
-      socket_(service_, self_.address()),
-      state(State::INITIALIZED),
-      receiver_fn_(t_receiver) {
-}
+Gossip::Gossip(const Member t_self_member,
+               const ReceiverFn t_receiver)
+    : m_self_member(make_shared<Member>(t_self_member)),
+      m_socket(m_context, t_self_member.address()),
+      m_receiver(t_receiver) {}
 
 void Gossip::run() {
-  while (state != State::DESTROYED) {
-    if (service_.stopped()) {
-      service_.restart();
-    }
-
-    if (!service_.poll()) {
-      receive_();
-      handle_send();
-
-      std::this_thread::sleep_for(std::chrono::milliseconds(gossip_tick_interval()));
-    }
-  }
-}
-
-Gossip::Error Gossip::handle_receive(std::shared_ptr<Message> &t_message, ip::udp::endpoint t_sender) {
-  switch (t_message->header.type) {
-    case Type::Hello: {
-      auto member = std::make_shared<Member>(self());
-      auto sender = std::make_shared<Member>(t_sender);
-      std::shared_ptr<Message> welcome = std::make_shared<Welcome>(member, t_message->header.sequence);
-      enqueue_message(welcome, sender, SpreadingType::DIRECT);
-
-      memberlist_.emplace(to_string(sender->uid()), sender);
-
-      std::shared_ptr<Message> memberlist = std::make_shared<Memberlist>(memberlist_);
-      enqueue_message(memberlist, sender, SpreadingType::BROADCAST);
-
-      break;
-    }
-    case Type::Welcome: {
-      state = State::CONNECTED;
-      std::shared_ptr<Welcome> welcome = std::dynamic_pointer_cast<Welcome>(t_message);
-      auto sender = std::make_shared<Member>(t_sender);
-      memberlist_.emplace(to_string(sender->uid()), sender);
-      message_.erase(find_if(message_.begin(), message_.end(), [welcome](std::shared_ptr<Message> val) { return val->header.sequence == welcome->hello_sequence; }));
-
-      break;
-    }
-    case Type::Memberlist: {
-      std::shared_ptr<Memberlist> memberlist = std::dynamic_pointer_cast<Memberlist>(t_message);
-      for (auto member : memberlist->members) {
-        auto m_member = std::make_shared<Member>(member);
-        memberlist_.emplace(to_string(member.uid()), m_member);
+  try {
+    while (m_state != State::DESTROYED) {
+      if (m_context.stopped()) {
+        m_context.restart();
       }
 
-      auto sender = std::make_shared<Member>(t_sender);
-      std::shared_ptr<Message> ack = std::make_shared<Ack>(t_message->header.sequence);
-      enqueue_message(ack, sender, SpreadingType::DIRECT);
+      if (!m_context.poll()) {
+        m_receive_handler();
+        m_send_handler();
 
-      break;
-    }
-    case Type::Ack: {
-      std::shared_ptr<Ack> ack = std::dynamic_pointer_cast<Ack>(t_message);
-
-      message_.erase(find_if(message_.begin(), message_.end(), [ack](std::shared_ptr<Message> val) { return val->header.sequence == ack->ack_sequence; }));
-
-      break;
-    }
-    case Type::Data: {
-      std::shared_ptr<Data> data = std::dynamic_pointer_cast<Data>(t_message);
-      std::shared_ptr<Message> m_data = data;
-      auto sender = std::make_shared<Member>(t_sender);
-      enqueue_message(m_data, sender, SpreadingType::RANDOM);
-      receiver_fn_(data->data);
-      break;
-    }
-  }
-}
-
-Gossip::Error Gossip::handle_send() {
-  if (this->state != State::JOINING && this->state != State::CONNECTED)
-    return Error::BAD_STATE;
-
-  while (!this->message_.empty()) {
-    Message message = *message_.front();
-    if (message.header.remain_attempt <= 0) {
-      if (message_retry_attempts() > 1) {
-        memberlist_.erase(to_string(message.header.destination->uid()));
+        sleep_for(milliseconds(gossip_tick_interval()));
       }
-
-      this->message_.pop_front();
-      continue;
     }
-
-    send_(message_.front());
-    message_.pop_front();
+  } catch (const std::exception &ex) {
+    std::cerr << ex.what() << std::endl;
   }
-
-  return Error::NONE;
 }
 
-Gossip::Error Gossip::enqueue_message(std::shared_ptr<Message> &t_message, std::shared_ptr<Member> &t_member, SpreadingType t_spreading_type) {
-  t_message->header.remain_attempt = message_retry_attempts();
+template <IMessages IMessage>
+Error Gossip::enqueue_message(const IMessage t_message,
+                              const Spreading t_spreading,
+                              const Member::shared_ptr t_member) {
+  Message::shared_ptr message = make_shared<IMessage>(t_message);
+  message->m_header.remain_attempt = message_retry_attempts();
 
-  switch (t_spreading_type) {
-    case SpreadingType::DIRECT:
-      t_message->header.destination = t_member;
-      message_.push_back(t_message);
-      return Gossip::Error::NONE;
-    case SpreadingType::RANDOM: {
-      decltype(memberlist_) reservoir;
-      sample(memberlist_.begin(), memberlist_.end(),
+  switch (t_spreading) {
+    case Spreading::DIRECT:
+      message->m_header.destination = t_member;
+      m_message.insert(message);
+      return Error::NONE;
+    case Spreading::RANDOM: {
+      decltype(m_memberlist) reservoir;
+      sample(m_memberlist.begin(), m_memberlist.end(),
              inserter(reservoir, reservoir.begin()),
              this->message_rumor_factor(),
-             std::mt19937{std::random_device{}()});
+             mt19937{random_device{}()});
       for (auto member : reservoir) {
-        t_message->header.destination = member.second;
-        message_.push_back(t_message);
+        message->m_header.destination = t_member;
+        m_message.insert(message);
       }
-      return Gossip::Error::NONE;
+      return Error::NONE;
     }
-    case SpreadingType::BROADCAST: {
-      for (auto member : memberlist_) {
-        t_message->header.destination = member.second;
-        message_.push_back(t_message);
+    case Spreading::BROADCAST: {
+      for (auto member : m_memberlist) {
+        message->m_header.destination = t_member;
+        m_message.insert(message);
       }
-      return Gossip::Error::NONE;
+      return Error::NONE;
     }
   }
 }
 
-Gossip::Error Gossip::add_member(Member t_member) {
-  if (state != State::INITIALIZED)
-    return Gossip::Error::BAD_STATE;
+template Error Gossip::enqueue_message(const Welcome t_message,
+                                       const Spreading t_spreading,
+                                       const Member::shared_ptr t_member);
 
-  auto temp = std::make_shared<Hello>(std::make_shared<Member>(self()));
-  std::shared_ptr<Message> hello = temp;
-  hello->header.remain_attempt = message_retry_attempts();
-  auto member = std::make_shared<Member>(Member(t_member));
-  Error res = enqueue_message(hello, member, SpreadingType::DIRECT);
+Error Gossip::add_member(const Member t_member) {
+  if (m_state != State::INITIALIZED)
+    return Error::BAD_STATE;
+
+  auto member = make_shared<Member>(Member(t_member));
+  Error res = enqueue_message(Hello(self_member()), Spreading::DIRECT, member);
   if ((uint32_t)res < 0)
     return res;
 
-  this->state = State::JOINING;
-  return Gossip::Error::NONE;
+  this->m_state = State::JOINING;
+  return Error::NONE;
 }
 
-void Gossip::send(string t_data) {
-  std::shared_ptr<Member> member = nullptr;
-  std::shared_ptr<Message> data = std::make_shared<Data>(t_data);
-  enqueue_message(data, member, SpreadingType::RANDOM);
-}
+Error Gossip::m_receive(const string t_data, const Member t_sender) {
+  BOOST_LOG_TRIVIAL(debug) << "Gossip::m_receive_hander:"
+                           << "\t[address]:" << t_sender.address();
 
-int32_t &Gossip::message_retry_interval() {
-  return message_retry_interval_;
-}
-const int32_t &Gossip::message_retry_interval() const {
-  return message_retry_interval_;
-}
+  istringstream iss(t_data);
+  text_iarchive ia(iss);
+  Message::shared_ptr message;
+  ia >> message;
+  BOOST_LOG_TRIVIAL(trace) << "Gossip::m_receive:"
+                           << "\t -> " << demangle(typeid(*message.get()).name());
 
-int32_t &Gossip::message_retry_attempts() {
-  return message_retry_attempts_;
-}
-const int32_t &Gossip::message_retry_attempts() const {
-  return message_retry_attempts_;
-}
-
-int32_t &Gossip::message_rumor_factor() {
-  return message_rumor_factor_;
-}
-const int32_t &Gossip::message_rumor_factor() const {
-  return message_rumor_factor_;
-}
-
-int32_t &Gossip::message_max_size() {
-  return message_max_size_;
-}
-const int32_t &Gossip::message_max_size() const {
-  return message_max_size_;
-}
-
-int32_t &Gossip::max_output_messages() {
-  return max_output_messages_;
-}
-const int32_t &Gossip::max_output_messages() const {
-  return max_output_messages_;
-}
-
-int32_t &Gossip::gossip_tick_interval() {
-  return gossip_tick_interval_;
-}
-const int32_t &Gossip::gossip_tick_interval() const {
-  return gossip_tick_interval_;
-}
-
-Member &Gossip::self() { return self_; };
-const Member &Gossip::self() const { return self_; };
-
-// TODO: Let switch be more general
-Gossip::Error Gossip::receive_() {
-  if (state != State::JOINING && state != State::CONNECTED)
-    return Error::BAD_STATE;
-
-  recv_buffer_.clear();
-  socket_.async_receive_from(
-      dynamic_buffer(recv_buffer_).prepare(max_output_messages()),
-      sender_,
-      [this](system::error_code ec, size_t length) {
-        BOOST_LOG_TRIVIAL(debug) << "\n\tReceived from address:"
-                                 << to_string(sender_)
-                                 << "\n\tReceived message:"
-                                 << recv_buffer_.substr(0, length);
-        istringstream iss(recv_buffer_.substr(0, length));
-        archive::text_iarchive ia(iss);
-        Message *message;
-        ia >> message;
-        auto p_message = std::shared_ptr<Message>(message);
-        if ((uint8_t)handle_receive(p_message, sender_) < 0)
-          return Error::INVALID_MESSAGE;
-      });
+  message->receive(*this, m_temp_sender);
 
   return Error::NONE;
 }
 
-void Gossip::send_(std::shared_ptr<Message> &t_message) {
-  string message = t_message->to_string();
-  BOOST_LOG_TRIVIAL(debug) << "\n\tSend to address:"
-                           << to_string(t_message->header.destination->address())
-                           << "\n\tSend message:"
-                           << message;
-  socket_.async_send_to(
-      buffer(message), t_message->header.destination->address(),
+template <IMessages_Ptr IMessage_Ptr>
+Error Gossip::m_send(IMessage_Ptr t_message) {
+  string message = to_string(t_message);
+  BOOST_LOG_TRIVIAL(debug) << "Gossip::m_send:"
+                           << "\t[address]:" << t_message->m_header.destination->address();
+
+  m_socket.async_send_to(
+      buffer(message),
+      t_message->m_header.destination->address(),
       [this](boost::system::error_code ec, std::size_t length) {
         if (ec)
           return;
       });
+
+  return Error::NONE;
 }
+
+void Gossip::m_receive_handler() {
+  if (m_state != State::JOINING && m_state != State::CONNECTED)
+    return;
+
+  m_temp_recv_buffer.clear();
+  m_socket.async_receive_from(
+      dynamic_buffer(m_temp_recv_buffer).prepare(max_output_messages()),
+      m_temp_sender,
+      [this](const error_code ec, const size_t length) {
+        if (ec) {
+          BOOST_LOG_TRIVIAL(error) << "Gossip::m_receive_handler:"
+                                   << "\t[address]:" << ec.message();
+
+          return;
+        }
+
+        m_receive(m_temp_recv_buffer.substr(0, length), m_temp_sender);
+      });
+}
+
+void Gossip::m_send_handler() {
+  if (this->m_state != State::JOINING && this->m_state != State::CONNECTED)
+    return;
+
+  while (!this->m_message.empty()) {
+    BOOST_LOG_TRIVIAL(trace) << "Gossip::m_send_handler:"
+                             << "\t -> " << demangle(typeid(**m_message.begin()).name());
+    Message message = **m_message.begin();
+    if (message.m_header.remain_attempt <= 0) {
+      if (message_retry_attempts() > 1) {
+        m_memberlist.erase(message.m_header.destination);
+      }
+
+      this->m_message.erase(this->m_message.begin());
+      continue;
+    }
+
+    m_send(*m_message.begin());
+    this->m_message.erase(this->m_message.begin());
+  }
+
+  return;
+}
+
+int32_t &Gossip::message_retry_interval() { return m_message_retry_interval; }
+const int32_t &Gossip::message_retry_interval() const { return m_message_retry_interval; }
+
+int32_t &Gossip::message_retry_attempts() { return m_message_retry_attempts; }
+const int32_t &Gossip::message_retry_attempts() const { return m_message_retry_attempts; }
+
+int32_t &Gossip::message_rumor_factor() { return m_message_rumor_factor; }
+const int32_t &Gossip::message_rumor_factor() const { return m_message_rumor_factor; }
+
+int32_t &Gossip::message_max_size() { return m_message_max_size; }
+const int32_t &Gossip::message_max_size() const { return m_message_max_size; }
+
+int32_t &Gossip::max_output_messages() { return m_max_output_messages; }
+const int32_t &Gossip::max_output_messages() const { return m_max_output_messages; }
+
+int32_t &Gossip::gossip_tick_interval() { return m_gossip_tick_interval; }
+const int32_t &Gossip::gossip_tick_interval() const { return m_gossip_tick_interval; }
+
+const Member::shared_ptr &Gossip::self_member() const { return m_self_member; }
 }; // namespace gossip
